@@ -1,0 +1,170 @@
+## Predicting Exercise Quality With Machine Learning
+
+Author: Daniela Petruzalek  
+e-mail: daniela.petruzalek@gmail.com  
+Date  : June 24, 2016
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(out.extra='style="display:block; margin: auto"', 
+                      fig.align="center", 
+                      fig.width = 4.5, 
+                      fig.height = 3)
+
+library(plyr)
+library(dplyr)
+library(caret)
+library(parallel)
+library(doParallel)
+```
+
+### Introduction
+
+This is the final project for the Practical Machine Learning course from John Hopkins University School of Public Health on Coursera.
+
+### Executive Summary
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to use data^[1] from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict if an exercise is correctly performed or not.
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+This project will utilize machine learning techniques to predict which class of exercise fits best the given test dataset, composed by 20 observations.
+
+### Exploratory Analysis
+
+We'll start by downloading the datasets and running some exploratory analysis.
+
+```{r data.load, message=FALSE, cache=TRUE}
+train.data.url  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"; 
+test.data.url   <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+train.data.file <- "pml-training.csv"
+test.data.file  <- "pml-testing.csv"
+
+if(!file.exists(train.data.file)) 
+        download.file(train.data.url, destfile = train.data.file)
+if(!file.exists(test.data.file))
+        download.file(test.data.url,  destfile = test.data.file)
+
+# Weight Lifting Exercise dataset
+wle      <- read.csv(train.data.file)
+# Renamed to prevent confusion with the actual model test set
+validate <- read.csv(test.data.file)
+
+d <- dim(wle)
+```
+
+We have `r d[1]` observations of `r d[2]` variables in the Weight Lifting Exercise (WLE) dataset. We will split this dataset into `training` and `testing` and then proceed with the exploratory analysis.
+
+```{r data.split, cache = TRUE}
+set.seed(7777) # all lucky sevens! FF7 :)
+
+idxTrain <- createDataPartition(wle$classe, p=0.75, list=FALSE)
+training <- wle[idxTrain,]
+testing  <- wle[-idxTrain,]
+
+# Save outcomes
+train.classe <- wle[idxTrain, "classe"]
+test.classe  <- wle[-idxTrain, "classe"]
+
+dt1 <- dim(training); print(dt1)
+dt2 <- dim(testing); print(dt2)
+
+str(training[,1:10])
+
+qplot(training$classe, fill = training$classe)
+```
+
+The first seven columns will be removed from the model, since they are not features of the exercise, but the name of the subjects and the timestamp of the measures. Also, the final column will be removed as well, since it is the outcome `classe`. This will allow us to focus on the movement features for training our model.
+
+A close inspection of the variables shows that several of the mesurements were loaded as factors, where they should have been loaded as numeric values. The code below accomplishes both tasks:
+
+```{r pre.process.type, warning=FALSE, cache=TRUE}
+training <- as.data.frame(apply(training[,-c(1:7, 160)], 2, as.numeric))
+testing  <- as.data.frame(apply(testing[,-c(1:7, 160)],  2, as.numeric))
+```
+
+When accounting for missing values, we can see that a great number of columns have mostly missing data (over 95% of the measurements):
+
+```{r pre.process.missing, cache = TRUE}
+missing <- filter(data.frame(col.name = names(training), 
+                             miss.pct = round(apply(is.na(training), 2, sum) / dt1[1], 2) ),
+                  miss.pct > .95)
+head(missing)
+```
+
+There are `r dim(missing)[1]` columns that fit this criteria. Since those columns have little to contribute to our prediction, we will exclude them from our modeling.
+
+```{r pre.process.missing.2, cache = TRUE}
+train  <- dplyr::select(training, which(round(apply(is.na(training), 2, sum ) / dt1[1], 2) < .95) )
+d2     <- dim(train) 
+
+ # Final check for zero and near zero covariates among the remaining variables
+nearZeroVar(train)
+```
+
+After excluding the mostly empty columns and checking for zero and near zero covariates, we are left with `r d2[1]` observations of `r d2[2]` variables to build our model.
+
+### Model Training
+
+Now that we have the most significant variables selected, we will setup the parallel processing libraries using the method described by Greski^[2]. This will allow faster processing times on multi-core CPUs.
+
+```{r parallel.setup}
+cluster <- makeCluster(detectCores()) # I'm running in a VM so I'm using all cores
+registerDoParallel(cluster)
+
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+```
+
+Next, we will fit three different models to check which one is more accurate for this dataset: random forest (rf), boosting with trees (gbm) and linear discriminant analysis (lda).
+
+```{r model.training, cache=TRUE, message=FALSE}
+model1 <- train(train.classe ~ ., method = "rf",  data = train, trControl = fitControl, verbose = FALSE)
+model2 <- train(train.classe ~ ., method = "gbm", data = train, trControl = fitControl, verbose = FALSE)
+model3 <- train(train.classe ~ ., method = "lda", data = train, trControl = fitControl, verbose = FALSE)
+
+stopCluster(cluster) # close parallel cluster
+```
+
+The code below will run the predictions for the `testing` dataset using the models built above and plot the confusion matrices and accuracies for each model.
+
+```{r model.analysis, cache=TRUE, message=FALSE}
+p1 <- predict(model1, testing)
+p2 <- predict(model2, testing) 
+p3 <- predict(model3, testing)
+
+c1 <- confusionMatrix(p1, test.classe)
+c2 <- confusionMatrix(p2, test.classe)
+c3 <- confusionMatrix(p3, test.classe)
+
+# Column 8 is the model accuracy
+c1$table; c1$byClass[,8]
+c2$table; c2$byClass[,8]
+c3$table; c3$byClass[,8]
+```
+
+The random forest model outperform both the gbm and lda models, the lda being by far the one with the worst performance. 
+
+### Predicting the Validation Set
+
+The final step is to predict the validation data set composed by 20 observations, as proposed by the project's especification. We will use the random forest model above, since it gave the best predictions.
+
+```{r final.pred, message=FALSE}
+validate  <- as.data.frame(apply(validate[,-c(1:7)],  2, as.numeric))
+pred <- predict(model1, validate)
+pred
+```
+
+### Conclusion
+
+For this particular exercise, the random forest model (`rf`) outperformed both the boosting with trees (`gbm`) and linear discriminant analysis (`lda`) models. Nevertheless, the `gbm` model performed close to the random forest, suggesting that it could be applicable to a real world scenario. 
+
+The accuracy of over 99% for the random forest model raises a concern about a possible overfitting. One alternative would be combine both rf and gbm models to possibly produce a more stable result, but that's out of the scope of the current work. Hence, further study on a different dataset is recommended.
+
+### References
+
+1. Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+2. Greski, L. Improving Performance of Random Forest in caret::train(). Available on [GitHub](https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md). Acessed in June, 24 of 2016.
