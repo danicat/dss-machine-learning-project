@@ -340,8 +340,8 @@ confusionMatrix(p1, valid.classe)</code></pre>
 ## Balanced Accuracy      0.8651   0.7762   0.7765   0.8350   0.7870</code></pre>
 <p>The random forest (<code>rf</code>) model outperform both the <code>gbm</code> and <code>lda</code> models with over 99% of accuracy against aproximately 96% and 70% respectively.</p>
 </div>
-<div id="predicting-the-validation-set" class="section level3">
-<h3>Predicting the Validation Set</h3>
+<div id="predicting-the-testing-set" class="section level3">
+<h3>Predicting the Testing Set</h3>
 <p>The final step is to predict the <code>testing</code> dataset composed by 20 observations, as proposed by the project’s especification. We will use the random forest model above, since it has the better accuracy.</p>
 <pre class="r"><code>testing  &lt;- as.data.frame(apply(testing[,-c(1:7)],  2, as.numeric))
 pred &lt;- predict(model1, testing)
